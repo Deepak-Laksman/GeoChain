@@ -1,12 +1,13 @@
+// Backend for QuadTree Proximity Search with Natural Language & Lat/Lon Support
+
 const express = require('express');
-const crypto = require('crypto');
-const app = express();
+const axios = require('axios');
 const cors = require('cors');
+const app = express();
 
-app.use(express.json());
 app.use(cors());
+app.use(express.json());
 
-// 1. Quad Tree Node
 class QuadTreeNode {
   constructor(boundary, capacity) {
     this.boundary = boundary;
@@ -53,109 +54,87 @@ class QuadTreeNode {
     this.divided = true;
   }
 
-  query(range, found = []) {
-    if (!this.intersects(this.boundary, range)) return found;
+  queryCircle(center, radius, found = []) {
+    if (!this.intersectsCircle(this.boundary, center, radius)) return found;
 
     for (const p of this.points) {
-      if (this.contains(range, p)) found.push(p);
+      const d = Math.sqrt((p.x - center.x) ** 2 + (p.y - center.y) ** 2);
+      if (d <= radius / 111320) found.push(p);
     }
 
     if (this.divided) {
-      this.northwest.query(range, found);
-      this.northeast.query(range, found);
-      this.southwest.query(range, found);
-      this.southeast.query(range, found);
+      this.northwest.queryCircle(center, radius, found);
+      this.northeast.queryCircle(center, radius, found);
+      this.southwest.queryCircle(center, radius, found);
+      this.southeast.queryCircle(center, radius, found);
     }
 
     return found;
   }
 
-  intersects(boundary, range) {
-    return !(
-      range.x - range.width / 2 > boundary.x + boundary.width / 2 ||
-      range.x + range.width / 2 < boundary.x - boundary.width / 2 ||
-      range.y - range.height / 2 > boundary.y + boundary.height / 2 ||
-      range.y + range.height / 2 < boundary.y - boundary.height / 2
-    );
+  intersectsCircle(boundary, center, radius) {
+    const dx = Math.max(Math.abs(center.x - boundary.x) - boundary.width / 2, 0);
+    const dy = Math.max(Math.abs(center.y - boundary.y) - boundary.height / 2, 0);
+    const distance = Math.sqrt(dx * dx + dy * dy);
+    return distance <= radius / 111320;
   }
 }
 
-// 2. Merkle Tree with Proofs
-class MerkleTree {
-  constructor(dataBlocks) {
-    this.leaves = dataBlocks.map(d => MerkleTree.hash(JSON.stringify(d)));
-    this.tree = this.buildTree(this.leaves);
-  }
+const quadTree = new QuadTreeNode({ x: 0, y: 0, width: 360, height: 180 }, 4);
 
-  static hash(data) {
-    return crypto.createHash('sha256').update(data).digest('hex');
-  }
+// Insert using either coordinates or location
+app.post('/insert', async (req, res) => {
+  const { name, useNaturalLanguage, location, x, y } = req.body;
 
-  buildTree(leaves) {
-    let level = leaves;
-    const tree = [leaves];
+  let coords = { x, y };
 
-    while (level.length > 1) {
-      const nextLevel = [];
-      for (let i = 0; i < level.length; i += 2) {
-        const left = level[i];
-        const right = level[i + 1] || left;
-        nextLevel.push(MerkleTree.hash(left + right));
-      }
-      level = nextLevel;
-      tree.unshift(level);
+  if (useNaturalLanguage && location) {
+    try {
+      const geo = await axios.get(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(location)}&format=json&limit=1`, {
+        headers: { 'User-Agent': 'QuadTreeApp/1.0' }
+      });
+      if (!geo.data[0]) return res.status(404).json({ error: 'location not found' });
+      coords = {
+        x: parseFloat(geo.data[0].lon),
+        y: parseFloat(geo.data[0].lat)
+      };
+    } catch (err) {
+      return res.status(500).json({ error: 'geocoding failed', details: err.message });
     }
-
-    return tree;
   }
 
-  getRoot() {
-    return this.tree[0][0];
-  }
-
-  getProof(index) {
-    let proof = [];
-    let levelIndex = this.tree.length - 1;
-    let currentIndex = index;
-
-    for (let i = this.tree.length - 1; i > 0; i--) {
-      const level = this.tree[i];
-      const siblingIndex = currentIndex % 2 === 0 ? currentIndex + 1 : currentIndex - 1;
-      const sibling = level[siblingIndex] || level[currentIndex];
-      proof.push(sibling);
-      currentIndex = Math.floor(currentIndex / 2);
-    }
-
-    return proof;
-  }
-}
-
-// 3. Instantiate the Quad Tree
-const rootBoundary = { x: 0, y: 0, width: 1000, height: 1000 };
-const quadTree = new QuadTreeNode(rootBoundary, 4);
-
-// 4. REST API
-app.post('/ingest', (req, res) => {
-  const { x, y, data } = req.body;
-  const point = { x, y, data, timestamp: new Date().toISOString() };
+  const point = { x: coords.x, y: coords.y, name, timestamp: new Date().toISOString() };
   quadTree.insert(point);
-  res.json({ status: 'Inserted', point });
+  res.json({ status: 'inserted', point });
 });
 
-app.post('/query', (req, res) => {
-  const { x, y, width, height } = req.body;
-  const results = quadTree.query({ x, y, width, height });
-  const merkle = new MerkleTree(results);
+// Query using either coordinates or location
+app.post('/geosearch', async (req, res) => {
+  const { query, radius, useNaturalLanguage } = req.body;
+  let center;
 
-  const proofs = results.map((item, i) => ({
-    item,
-    proof: merkle.getProof(i)
-  }));
+  if (useNaturalLanguage) {
+    try {
+      const geo = await axios.get(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1`, {
+        headers: { 'User-Agent': 'QuadTreeApp/1.0' }
+      });
+      if (!geo.data[0]) return res.status(404).json({ error: 'location not found' });
+      center = {
+        x: parseFloat(geo.data[0].lon),
+        y: parseFloat(geo.data[0].lat)
+      };
+    } catch (err) {
+      return res.status(500).json({ error: 'geocoding failed', details: err.message });
+    }
+  } else {
+    const [lat, lon] = query.split(',').map(Number);
+    if (isNaN(lat) || isNaN(lon)) return res.status(400).json({ error: 'Invalid coordinates' });
+    center = { x: lon, y: lat };
+  }
 
-  res.json({ results, merkleRoot: merkle.getRoot(), proofs });
+  const results = quadTree.queryCircle(center, radius).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+  res.json({ center, radius, results });
 });
 
 const PORT = 3000;
-app.listen(PORT, () => {
-  console.log(`GeoChain backend running on http://localhost:${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));

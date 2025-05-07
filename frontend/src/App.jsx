@@ -1,112 +1,105 @@
-// GeoChain Frontend (React + Leaflet)
+// Frontend for GeoChain (React + Leaflet + Axios + UI Enhancements)
 import React, { useState } from 'react';
-import { MapContainer, TileLayer, useMapEvents, Rectangle } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Circle } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import axios from 'axios';
+import './App.css'; // Assume custom CSS for responsive layout
 
-const IngestPoint = ({ onIngest }) => {
-  const [x, setX] = useState('');
-  const [y, setY] = useState('');
-  const [data, setData] = useState('');
+const App = () => {
+  const [useNaturalLang, setUseNaturalLang] = useState(true);
+  const [insertMode, setInsertMode] = useState(true);
+  const [locationInput, setLocationInput] = useState('');
+  const [lat, setLat] = useState('');
+  const [lon, setLon] = useState('');
+  const [radius, setRadius] = useState(1000);
+  const [name, setName] = useState('');
+  const [results, setResults] = useState([]);
+  const [center, setCenter] = useState([20, 77]);
 
-  const handleSubmit = async () => {
-    await axios.post('http://localhost:3000/ingest', { x: +x, y: +y, data });
-    onIngest();
+  const toggleMode = () => setInsertMode(!insertMode);
+  const toggleInputType = () => setUseNaturalLang(!useNaturalLang);
+
+  const handleInsert = async () => {
+    try {
+      const payload = useNaturalLang
+        ? { useNaturalLanguage: true, location: locationInput, name }
+        : { useNaturalLanguage: false, x: parseFloat(lon), y: parseFloat(lat), name };
+
+      const res = await axios.post('http://localhost:3000/insert', payload);
+      alert('Data inserted: ' + JSON.stringify(res.data.point));
+    } catch (err) {
+      alert('Insert error: ' + err.message);
+    }
+  };
+
+  const handleSearch = async () => {
+    try {
+      const payload = useNaturalLang
+        ? { useNaturalLanguage: true, query: locationInput, radius }
+        : { useNaturalLanguage: false, query: `${lat},${lon}`, radius };
+
+      const res = await axios.post('http://localhost:3000/geosearch', payload);
+      setResults(res.data.results);
+      setCenter([res.data.center.y, res.data.center.x]);
+    } catch (err) {
+      alert('Search error: ' + err.message);
+    }
   };
 
   return (
-    <div className="p-4 space-y-2">
-      <h2 className="text-lg font-bold">Ingest Point</h2>
-      <input placeholder="X" value={x} onChange={e => setX(e.target.value)} className="border p-1" />
-      <input placeholder="Y" value={y} onChange={e => setY(e.target.value)} className="border p-1" />
-      <input placeholder="Data" value={data} onChange={e => setData(e.target.value)} className="border p-1" />
-      <button onClick={handleSubmit} className="bg-blue-500 text-white px-2 py-1">Submit</button>
-    </div>
-  );
-};
+    <div style={{ minHeight: '100vh', padding: '40px', fontFamily: 'Segoe UI, sans-serif', background: 'linear-gradient(to right, #e0eafc, #cfdef3)' }}>
+      <div style={{ maxWidth: '1100px', margin: '0 auto', background: '#ffffff', borderRadius: '16px', padding: '30px', boxShadow: '0 12px 30px rgba(0,0,0,0.15)' }}>
+        <h1 style={{ textAlign: 'center', color: '#1a365d', fontSize: '2.5rem' }}>🌍 GeoChain</h1>
 
-const QueryRegion = ({ onQuery }) => {
-  const [x, setX] = useState('');
-  const [y, setY] = useState('');
-  const [width, setWidth] = useState('');
-  const [height, setHeight] = useState('');
+        <div style={{ marginBottom: 20, display: 'flex', justifyContent: 'center', flexWrap: 'wrap', gap: '10px' }}>
+          <button onClick={toggleMode} className="btn">{insertMode ? 'Mode: Insert' : 'Mode: Search'}</button>
+          <button onClick={toggleInputType} className="btn">{useNaturalLang ? 'Input: Natural Language' : 'Input: Lat/Lon'}</button>
+        </div>
 
-  const handleQuery = async () => {
-    const res = await axios.post('http://localhost:3000/query', {
-      x: +x,
-      y: +y,
-      width: +width,
-      height: +height
-    });
-    onQuery(res.data);
-  };
+        <div className="form-section">
+          {useNaturalLang ? (
+            <input className="input" placeholder="Enter location (e.g., New York)" value={locationInput} onChange={e => setLocationInput(e.target.value)} />
+          ) : (
+            <>
+              <input className="input" placeholder="Latitude" value={lat} onChange={e => setLat(e.target.value)} />
+              <input className="input" placeholder="Longitude" value={lon} onChange={e => setLon(e.target.value)} />
+            </>
+          )}
 
-  return (
-    <div className="p-4 space-y-2">
-      <h2 className="text-lg font-bold">Query Region</h2>
-      <input placeholder="Center X" value={x} onChange={e => setX(e.target.value)} className="border p-1" />
-      <input placeholder="Center Y" value={y} onChange={e => setY(e.target.value)} className="border p-1" />
-      <input placeholder="Width" value={width} onChange={e => setWidth(e.target.value)} className="border p-1" />
-      <input placeholder="Height" value={height} onChange={e => setHeight(e.target.value)} className="border p-1" />
-      <button onClick={handleQuery} className="bg-green-500 text-white px-2 py-1">Query</button>
-    </div>
-  );
-};
+          {insertMode ? (
+            <>
+              <input className="input" placeholder="Name" value={name} onChange={e => setName(e.target.value)} />
+              <button className="btn" onClick={handleInsert}>📍 Insert</button>
+            </>
+          ) : (
+            <>
+              <input className="input" placeholder="Radius in meters" value={radius} onChange={e => setRadius(e.target.value)} />
+              <button className="btn" onClick={handleSearch}>🔍 Search</button>
+            </>
+          )}
+        </div>
 
-const MapSelector = ({ region }) => {
-  const bounds = region
-    ? [
-        [region.y - region.height / 2, region.x - region.width / 2],
-        [region.y + region.height / 2, region.x + region.width / 2]
-      ]
-    : null;
+        <div style={{ marginTop: '30px' }}>
+          <MapContainer center={center} zoom={5} style={{ height: '500px', width: '100%' }} key={center.toString()}>
+            <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+            <Circle center={center} radius={parseFloat(radius)} pathOptions={{ color: 'blue' }} />
+            {results.map((p, i) => (
+              <Marker key={i} position={[p.y, p.x]} />
+            ))}
+          </MapContainer>
+        </div>
 
-  return (
-    <MapContainer center={[0, 0]} zoom={2} style={{ height: '500px' }}>
-      <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-      {bounds && <Rectangle bounds={bounds} pathOptions={{ color: 'red' }} />}
-    </MapContainer>
-  );
-};
-
-export default function App() {
-  const [region, setRegion] = useState(null);
-  const [queryResult, setQueryResult] = useState(null);
-
-  return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4">
-      <div>
-        <IngestPoint onIngest={() => alert('Point inserted')} />
-        <QueryRegion
-          onQuery={data => {
-            setQueryResult(data);
-            setRegion({
-              x: data.results[0]?.x || 0,
-              y: data.results[0]?.y || 0,
-              width: 100,
-              height: 100
-            });
-          }}
-        />
-      </div>
-      <div>
-        <MapSelector region={region} />
-        {queryResult && (
-          <div className="mt-4">
-            <h3 className="font-bold">Merkle Root:</h3>
-            <p className="break-all text-xs bg-gray-100 p-2">{queryResult.merkleRoot}</p>
-            <h4 className="font-bold mt-2">Results:</h4>
-            <ul className="text-sm">
-              {queryResult.results.map((r, i) => (
-                <li key={i} className="border-b py-1">
-                  ({r.x}, {r.y}) → {r.data}
-                  <br />Proof: {queryResult.proofs[i].proof.join(', ')}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
+        <h3 style={{ marginTop: '30px', color: '#1a365d' }}>📦 Results (sorted by timestamp):</h3>
+        <ul style={{ listStyle: 'none', padding: 0 }}>
+          {results.map((p, i) => (
+            <li key={i} style={{ padding: '8px 0', borderBottom: '1px solid #ccc' }}>
+              <strong>{p.name}</strong> — {new Date(p.timestamp).toLocaleString()} — 📍 ({p.y}, {p.x})
+            </li>
+          ))}
+        </ul>
       </div>
     </div>
   );
-}
+};
+
+export default App;
